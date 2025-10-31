@@ -264,7 +264,7 @@ impl<S: Signer> Installer<S> {
         let stub_target = self
             .esp_paths
             .linux
-            .join(stub_name(generation, &self.signer).context("Get stub name")?);
+            .join(stub_name(generation, true, &self.signer).context("Get stub name")?);
         self.gc_roots.extend([&stub_target]);
         install_signed(&self.signer, &lanzaboote_image_path, &stub_target)
             .context("Failed to install the Lanzaboote stub.")?;
@@ -279,7 +279,7 @@ impl<S: Signer> Installer<S> {
         let stub_target = self
             .esp_paths
             .linux
-            .join(stub_name(generation, &self.signer).context("While getting stub name")?);
+            .join(stub_name(generation, false, &self.signer).context("While getting stub name")?);
         let stub = fs::read(&stub_target)
             .with_context(|| format!("Failed to read the stub: {}", stub_target.display()))?;
         let kernel_path = resolve_efi_path(
@@ -374,7 +374,7 @@ fn resolve_efi_path(esp: &Path, efi_path: &[u8]) -> Result<PathBuf> {
 /// Compute the file name to be used for the stub of a certain generation, signed with the given key.
 ///
 /// The generated name is input-addressed by the toplevel corresponding to the generation and the public part of the signing key.
-fn stub_name<S: Signer>(generation: &Generation, signer: &S) -> Result<PathBuf> {
+fn stub_name<S: Signer>(generation: &Generation, add_tries: bool, signer: &S) -> Result<PathBuf> {
     let bootspec = &generation.spec.bootspec.bootspec;
     let public_key = signer.get_public_key()?;
     let stub_inputs = [
@@ -388,16 +388,36 @@ fn stub_name<S: Signer>(generation: &Generation, signer: &S) -> Result<PathBuf> 
     let stub_input_hash = Base32Unpadded::encode_string(&Sha256::digest(
         serde_json::to_string(&stub_inputs).unwrap(),
     ));
-    if let Some(specialisation_name) = &generation.specialisation_name {
-        Ok(PathBuf::from(format!(
-            "nixos-generation-{}-specialisation-{}-{}.efi",
-            generation, specialisation_name, stub_input_hash
-        )))
+
+    if add_tries {
+        let lanzaboote_tries = match std::env::var("LANZABOOTE_TRIES") {
+            Ok(val) => val,
+            Err(_) => String::from(""),
+        };
+
+        if let Some(specialisation_name) = &generation.specialisation_name {
+            Ok(PathBuf::from(format!(
+                "nixos-generation-{}-specialisation-{}-{}{}.efi",
+                generation, specialisation_name, stub_input_hash, lanzaboote_tries
+            )))
+        } else {
+            Ok(PathBuf::from(format!(
+                "nixos-generation-{}-{}{}.efi",
+                generation, stub_input_hash, lanzaboote_tries
+            )))
+        }
     } else {
-        Ok(PathBuf::from(format!(
-            "nixos-generation-{}-{}.efi",
-            generation, stub_input_hash
-        )))
+        if let Some(specialisation_name) = &generation.specialisation_name {
+            Ok(PathBuf::from(format!(
+                "nixos-generation-{}-specialisation-{}-{}.efi",
+                generation, specialisation_name, stub_input_hash
+            )))
+        } else {
+            Ok(PathBuf::from(format!(
+                "nixos-generation-{}-{}.efi",
+                generation, stub_input_hash
+            )))
+        }
     }
 }
 
