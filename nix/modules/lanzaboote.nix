@@ -1,4 +1,10 @@
-{ lib, config, options, pkgs, ... }:
+{
+  lib,
+  config,
+  options,
+  pkgs,
+  ...
+}:
 let
   cfg = config.boot.lanzaboote;
 
@@ -7,8 +13,7 @@ let
   };
 
   loaderSettingsFormat = pkgs.formats.keyValue {
-    mkKeyValue = k: v: if v == null then "" else
-    lib.generators.mkKeyValueDefault { } " " k v;
+    mkKeyValue = k: v: if v == null then "" else lib.generators.mkKeyValueDefault { } " " k v;
   };
 
   loaderConfigFile = loaderSettingsFormat.generate "loader.conf" cfg.settings;
@@ -20,6 +25,29 @@ in
     enable = lib.mkEnableOption "Enable the LANZABOOTE";
 
     enrollKeys = lib.mkEnableOption "Do not use this option. Only for used for integration tests! Automatic enrollment of the keys using sbctl";
+
+    extraEntries = lib.mkOption {
+      type = lib.types.attrsOf lib.types.lines;
+      default = config.boot.loader.systemd-boot.extraEntries;
+      example = lib.literalExpression ''
+        { "memtest86.conf" = '''
+          title Memtest86+
+          efi /efi/memtest86/memtest.efi
+          sort-key z_memtest
+        '''; }
+      '';
+      description = ''
+        Any additional entries you want added to the `systemd-boot` menu.
+        These entries will be copied to {file}`$BOOT/loader/entries`.
+        Each attribute name denotes the destination file name,
+        and the corresponding attribute value is the contents of the entry.
+
+        To control the ordering of the entry in the boot menu, use the sort-key
+        field, see
+        <https://uapi-group.org/specifications/specs/boot_loader_specification/#sorting>
+        and {option}`boot.loader.systemd-boot.sortKey`.
+      '';
+    };
 
     configurationLimit = lib.mkOption {
       default = config.boot.loader.systemd-boot.configurationLimit;
@@ -121,25 +149,36 @@ in
     boot.loader.supportsInitrdSecrets = true;
     boot.loader.external = {
       enable = true;
-      installHook = pkgs.writeShellScript "bootinstall" ''
-        ${lib.optionalString cfg.enrollKeys ''
-          ${lib.getExe' pkgs.coreutils "mkdir"} -p /tmp/pki
-          ${lib.getExe' pkgs.coreutils "cp"} -r ${cfg.pkiBundle}/* /tmp/pki
-          ${lib.getExe sbctlWithPki} enroll-keys --yes-this-might-brick-my-machine
-        ''}
+      installHook =
+        let
+          bootMountPoint = config.boot.loader.efi.efiSysMountPoint;
+        in
+        pkgs.writeShellScript "bootinstall" ''
+          ${lib.optionalString cfg.enrollKeys ''
+            ${lib.getExe' pkgs.coreutils "mkdir"} -p /tmp/pki
+            ${lib.getExe' pkgs.coreutils "cp"} -r ${cfg.pkiBundle}/* /tmp/pki
+            ${lib.getExe sbctlWithPki} enroll-keys --yes-this-might-brick-my-machine
+          ''}
 
-        # Use the system from the kernel's hostPlatform because this should
-        # always, even in the cross compilation case, be the right system.
-        ${lib.getExe cfg.package} install \
-          --system ${config.boot.kernelPackages.stdenv.hostPlatform.system} \
-          --systemd ${config.systemd.package} \
-          --systemd-boot-loader-config ${loaderConfigFile} \
-          --public-key ${cfg.publicKeyFile} \
-          --private-key ${cfg.privateKeyFile} \
-          --configuration-limit ${toString configurationLimit} \
-          ${config.boot.loader.efi.efiSysMountPoint} \
-          /nix/var/nix/profiles/system-*-link
-      '';
+          # Use the system from the kernel's hostPlatform because this should
+          # always, even in the cross compilation case, be the right system.
+          ${lib.getExe cfg.package} install \
+            --system ${config.boot.kernelPackages.stdenv.hostPlatform.system} \
+            --systemd ${config.systemd.package} \
+            --systemd-boot-loader-config ${loaderConfigFile} \
+            --public-key ${cfg.publicKeyFile} \
+            --private-key ${cfg.privateKeyFile} \
+            --configuration-limit ${toString configurationLimit} \
+            ${config.boot.loader.efi.efiSysMountPoint} \
+            /nix/var/nix/profiles/system-*-link
+
+          ${lib.concatStrings (
+            lib.mapAttrsToList (n: v: ''
+              ${pkgs.coreutils}/bin/install -Dp "${pkgs.writeText n v}" "${bootMountPoint}/loader/entries/"${lib.escapeShellArg n}
+              ${pkgs.coreutils}/bin/install -D /dev/null "${bootMountPoint}/EFI/nixos/.extra-files/loader/entries/"${lib.escapeShellArg n}
+            '') cfg.extraEntries
+          )}
+        '';
     };
 
     systemd.services.fwupd = lib.mkIf config.services.fwupd.enable {
