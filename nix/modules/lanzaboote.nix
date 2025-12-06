@@ -46,6 +46,29 @@ in
   options.boot.lanzaboote = {
     enable = lib.mkEnableOption "Enable the LANZABOOTE";
 
+    extraEntries = lib.mkOption {
+      type = lib.types.attrsOf lib.types.lines;
+      default = config.boot.loader.systemd-boot.extraEntries;
+      example = lib.literalExpression ''
+        { "memtest86.conf" = '''
+          title Memtest86+
+          efi /efi/memtest86/memtest.efi
+          sort-key z_memtest
+        '''; }
+      '';
+      description = ''
+        Any additional entries you want added to the `systemd-boot` menu.
+        These entries will be copied to {file}`$BOOT/loader/entries`.
+        Each attribute name denotes the destination file name,
+        and the corresponding attribute value is the contents of the entry.
+
+        To control the ordering of the entry in the boot menu, use the sort-key
+        field, see
+        <https://uapi-group.org/specifications/specs/boot_loader_specification/#sorting>
+        and {option}`boot.loader.systemd-boot.sortKey`.
+      '';
+    };
+
     configurationLimit = lib.mkOption {
       default = config.boot.loader.systemd-boot.configurationLimit;
       defaultText = "config.boot.loader.systemd-boot.configurationLimit";
@@ -316,6 +339,13 @@ in
           # Re-sign all the artifacts on the ESP after the new keys have been
           # auto enrolled.
           ${mkInstallCommand espMountPoint}
+
+          ${lib.concatStrings (
+            lib.mapAttrsToList (n: v: ''
+              ${pkgs.coreutils}/bin/install -Dp "${pkgs.writeText n v}" "${espMountPoint}/loader/entries/"${lib.escapeShellArg n}
+              ${pkgs.coreutils}/bin/install -D /dev/null "${espMountPoint}/EFI/nixos/.extra-files/loader/entries/"${lib.escapeShellArg n}
+            '') cfg.extraEntries
+          )}
         '';
     };
 
